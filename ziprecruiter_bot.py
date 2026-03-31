@@ -649,6 +649,34 @@ def apply_filters(driver, logger):
     return True
 
 
+def filters_ok(driver):
+    """Lightweight check: URL has filter params and key radios look selected."""
+    url = driver.current_url.lower()
+    if "quick_apply" not in url or "employment_type" not in url:
+        return False
+    try:
+        return driver.execute_script(
+            """
+            const selected = (txt) => {
+              const label = Array.from(document.querySelectorAll('label')).find(l => (l.innerText||'').trim().toLowerCase() === txt);
+              if (label && (label.getAttribute('aria-checked') === 'true' || label.querySelector('input:checked'))) return true;
+              return false;
+            };
+            return selected('quick apply only') && selected('contract');
+            """
+        )
+    except Exception:
+        return False
+
+
+def ensure_filters(driver, logger):
+    """Re-apply filters if ZipRecruiter dropped them after navigation."""
+    if filters_ok(driver):
+        return
+    logger.info("   ℹ️ Filters missing/cleared — reapplying")
+    apply_filters(driver, logger)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # JOB SCANNING & APPLICATION
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1397,6 +1425,7 @@ def run(dry_run=False):
 
         # ── Step 5: Scan & Apply Loop ──
         for page_num in range(1, config.MAX_PAGES + 1):
+            ensure_filters(driver, logger)
             stats["pages_scanned"] += 1
             logger.info(f"\n{'─'*60}")
             logger.info(f"📄 PAGE {page_num}")

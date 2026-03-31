@@ -237,13 +237,13 @@ def create_driver(logger):
 
     driver = None
 
-    if USING_UC:
+    if USING_UC and getattr(config, "USE_UNDETECTED", False):
         logger.info("🚀 Trying undetected-chromedriver for stealth mode...")
         try:
             options = uc.ChromeOptions()
             options.add_argument("--start-maximized")
             options.add_argument("--disable-blink-features=AutomationControlled")
-            options.add_experimental_option("detach", True)
+            # avoid unsupported 'detach' flag for uc
             driver = uc.Chrome(options=options)
         except Exception as e:
             logger.warning(f"⚠️ undetected-chromedriver failed: {e}")
@@ -258,6 +258,13 @@ def create_driver(logger):
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option("useAutomationExtension", False)
         options.add_experimental_option("detach", True)
+
+        # Reuse real Chrome profile to carry cookies and reduce CAPTCHAs
+        if getattr(config, "USER_DATA_DIR", ""):
+            options.add_argument(f"--user-data-dir={config.USER_DATA_DIR}")
+        if getattr(config, "PROFILE_DIRECTORY", ""):
+            options.add_argument(f"--profile-directory={config.PROFILE_DIRECTORY}")
+
         driver = webdriver.Chrome(options=options)
         # Remove webdriver flag
         driver.execute_script(
@@ -284,6 +291,20 @@ def login(driver, logger):
     logger.info(f"🔐 Navigating to login page: {LOGIN_URL}")
     driver.get(LOGIN_URL)
     human_delay((3, 5))
+
+    # Handle Cloudflare "Verify you are human" page
+    def wait_for_challenge_clear():
+        start = time.time()
+        while time.time() - start < config.MANUAL_LOGIN_TIMEOUT:
+            page = driver.page_source.lower()
+            if "performing security verification" in page or "verify you are human" in page:
+                logger.info("🛡️ Cloudflare challenge detected — please complete the checkbox in the browser...")
+                time.sleep(2)
+                continue
+            return True
+        return False
+
+    wait_for_challenge_clear()
 
     # Check if already logged in (redirected to dashboard)
     if "/login" not in driver.current_url.lower():

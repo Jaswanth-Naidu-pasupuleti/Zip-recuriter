@@ -111,6 +111,14 @@ PAGE_LOAD_TIMEOUT = 20
 # Time to wait for user to complete manual login (seconds)
 MANUAL_LOGIN_TIMEOUT = 120
 
+# Optional: use your real Chrome profile to reuse cookies/sessions (helps avoid CAPTCHAs)
+# Example (macOS): USER_DATA_DIR = "/Users/<you>/Library/Application Support/Google/Chrome"
+USER_DATA_DIR = ""
+PROFILE_DIRECTORY = "Default"
+
+# Set to True to try undetected_chromedriver first; False to stick with standard ChromeDriver
+USE_UNDETECTED = False
+
 # ──────────────────────────────────────────────────────────────────────────────
 # APPLICANT INFO — Used to auto-fill application forms
 # ──────────────────────────────────────────────────────────────────────────────

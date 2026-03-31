@@ -677,6 +677,30 @@ def ensure_filters(driver, logger):
     apply_filters(driver, logger)
 
 
+def ensure_on_search_page(driver, logger, main_handle):
+    """Keep focus on the search page/pane; close stray tabs and return to main."""
+    handles = driver.window_handles
+    if len(handles) > 1:
+        for h in handles:
+            if h != main_handle:
+                try:
+                    driver.switch_to.window(h)
+                    driver.close()
+                except Exception:
+                    pass
+        driver.switch_to.window(main_handle)
+        logger.info("   ℹ️ Closed stray tab and returned to main window")
+
+    if "jobs-search" not in driver.current_url.lower():
+        logger.info("   ℹ️ Not on search page, navigating back")
+        try:
+            driver.back()
+            human_delay((1.0, 1.5))
+        except Exception:
+            pass
+        ensure_filters(driver, logger)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # JOB SCANNING & APPLICATION
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1411,6 +1435,7 @@ def run(dry_run=False):
     try:
         # ── Step 1: Launch browser ──
         driver = create_driver(logger)
+        main_window = driver.current_window_handle
 
         # ── Step 2: Login ──
         if not login(driver, logger):
@@ -1425,6 +1450,7 @@ def run(dry_run=False):
 
         # ── Step 5: Scan & Apply Loop ──
         for page_num in range(1, config.MAX_PAGES + 1):
+            ensure_on_search_page(driver, logger, main_window)
             ensure_filters(driver, logger)
             stats["pages_scanned"] += 1
             logger.info(f"\n{'─'*60}")

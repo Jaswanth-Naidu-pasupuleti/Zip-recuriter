@@ -529,36 +529,53 @@ def apply_filters(driver, logger):
     logger.info("🔧 Applying filters...")
     human_delay((1, 2))
 
+    wait = WebDriverWait(driver, config.PAGE_LOAD_TIMEOUT)
+
     # Open filters icon near search bar
     try:
-        opened = driver.execute_script(
-            """
-            // Prefer the header filters button (id observed: zds-header-filters-button)
-            const direct = document.querySelector('#zds-header-filters-button');
-            if (direct && direct.offsetHeight > 0) { direct.click(); return true; }
+        def open_filters(drv):
+            # Prefer the header filters button (id observed: zds-header-filters-button)
+            btn = drv.find_element(By.ID, "zds-header-filters-button")
+            if btn.is_displayed():
+                btn.click()
+                return True
+            return False
 
-            // Fallback: any button with filter in id/class/aria-label
-            const buttons = document.querySelectorAll('button, a, [role="button"]');
-            for (const btn of buttons) {
-                const txt = (btn.innerText || '').toLowerCase().trim();
-                const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
-                const cls = (btn.className || '').toLowerCase();
-                const id = (btn.id || '').toLowerCase();
-                if (aria.includes('filter') || id.includes('filter') || cls.includes('filter') || txt.includes('filter')) {
-                    if (btn.offsetHeight > 0 && btn.offsetWidth > 0) { btn.click(); return true; }
-                }
-            }
-            return false;
-            """
-        )
+        opened = False
+        try:
+            opened = open_filters(driver)
+        except Exception:
+            pass
+
+        if not opened:
+            # Fallback: any button with filter in id/class/aria-label
+            buttons = driver.find_elements(By.CSS_SELECTOR, "button, a, [role='button']")
+            for btn in buttons:
+                txt = (btn.text or "").lower().strip()
+                aria = (btn.get_attribute("aria-label") or "").lower()
+                cls = (btn.get_attribute("class") or "").lower()
+                idv = (btn.get_attribute("id") or "").lower()
+                if "filter" in aria or "filter" in idv or "filter" in cls or "filter" in txt:
+                    if btn.is_displayed():
+                        btn.click()
+                        opened = True
+                        break
+
         logger.info(f"   Filters drawer open: {opened}")
         human_delay((1.0, 1.5))
+        # Wait for drawer content
+        wait.until(lambda d: "apply type" in d.page_source.lower())
     except Exception as e:
         logger.warning(f"   ⚠️ Could not open filters drawer: {e}")
 
     # Apply type
     if getattr(config, "EASY_APPLY_ONLY", False):
-        clicked = _click_by_text(driver, ["quick apply only", "quick apply"])
+        try:
+            opt = wait.until(EC.element_to_be_clickable((By.XPATH, "//label[normalize-space()='Quick apply only']")))
+            opt.click()
+            clicked = "quick apply only"
+        except Exception:
+            clicked = _click_by_text(driver, ["quick apply only", "quick apply"])
         logger.info(f"   📌 Apply type -> Quick apply only ({'hit ' + clicked if clicked else 'not found'})")
         human_delay((0.6, 1.0))
 
@@ -567,7 +584,12 @@ def apply_filters(driver, logger):
     if job_type:
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight * 0.6);")
         human_delay((0.4, 0.8))
-        clicked = _click_by_text(driver, ["contract", "contractor"])
+        try:
+            opt = wait.until(EC.element_to_be_clickable((By.XPATH, "//label[normalize-space()='Contract']")))
+            opt.click()
+            clicked = "contract"
+        except Exception:
+            clicked = _click_by_text(driver, ["contract", "contractor"])
         logger.info(f"   📌 Employment type -> Contract ({'hit ' + clicked if clicked else 'not found'})")
         human_delay((0.6, 1.0))
 
@@ -575,7 +597,12 @@ def apply_filters(driver, logger):
     if config.DATE_POSTED == "last_24_hours":
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight * 0.3);")
         human_delay((0.4, 0.7))
-        clicked = _click_by_text(driver, ["within 1 day", "last 24 hours"])
+        try:
+            opt = wait.until(EC.element_to_be_clickable((By.XPATH, "//label[normalize-space()='Within 1 day']")))
+            opt.click()
+            clicked = "within 1 day"
+        except Exception:
+            clicked = _click_by_text(driver, ["within 1 day", "last 24 hours"])
         logger.info(f"   📌 Date posted -> Within 1 day ({'hit ' + clicked if clicked else 'not found'})")
         human_delay((0.6, 1.0))
 

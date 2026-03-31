@@ -119,10 +119,12 @@ def setup_logging():
 # UTILITY HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 def human_delay(delay_range=None):
-    """Sleep for a random duration within the given (min, max) range."""
+    """Sleep for a random duration within the given (min, max) range, scaled by DELAY_FACTOR."""
     if delay_range is None:
         delay_range = config.ACTION_DELAY
-    duration = random.uniform(*delay_range)
+
+    factor = getattr(config, "DELAY_FACTOR", 1.0)
+    duration = random.uniform(*delay_range) * factor
     time.sleep(duration)
 
 
@@ -421,161 +423,170 @@ def _wait_for_manual_login(driver, logger):
 # ─────────────────────────────────────────────────────────────────────────────
 # JOB SEARCH
 # ─────────────────────────────────────────────────────────────────────────────
-def perform_search(driver, logger):
-    """Navigate to job search and enter the search query + location."""
+def build_search_url():
+    """Construct a deterministic search URL with all desired filters encoded in query params."""
     location = config.SEARCH_LOCATION or "USA"
-    logger.info(f"🔍 Searching for: '{config.SEARCH_QUERY}' in '{location}'")
+    params = [
+        ("search", config.SEARCH_QUERY),
+        ("location", location),
+    ]
 
-    # Build search URL with query parameters
-    search_params = f"?search={config.SEARCH_QUERY.replace(' ', '+')}"
-    search_params += f"&location={location.replace(' ', '+').replace(',', '%2C')}"
-
-    # Add date filter
     days = DATE_FILTER_MAP.get(config.DATE_POSTED)
     if days:
-        search_params += f"&days={days}"
+        params.append(("days", days))
 
-    # Add quick/easy apply filter via URL parameter
-    if getattr(config, 'EASY_APPLY_ONLY', False):
-        search_params += "&quick_apply=true"
+    if getattr(config, "EASY_APPLY_ONLY", False):
+        params.extend([
+            ("quick_apply", 1),
+            ("refine_by_quick_apply", "true"),
+        ])
 
-    search_url = SEARCH_URL + search_params
-    logger.info(f"   📎 URL: {search_url}")
+    job_type = JOB_TYPE_MAP.get(config.JOB_TYPE)
+    if job_type:
+        # Add multiple variants to cover ZipRecruiter's differing param expectations
+        params.extend([
+            ("employment_type", job_type),
+            ("refine_by_employment_type", job_type),
+            ("employment_type", f"{job_type}or" if job_type.endswith('t') else job_type),
+        ])
+
+    # Build query string (keep order stable for logging/debugging)
+    query = "&".join([f"{k}={str(v).replace(' ', '+').replace(',', '%2C')}" for k, v in params])
+    return f"{SEARCH_URL}?{query}"
+
+
+def perform_search(driver, logger):
+    """Navigate to job search and enter the search query + location."""
+    search_url = build_search_url()
+    logger.info(f"🔍 Searching with URL: {search_url}")
     driver.get(search_url)
     human_delay((3, 5))
 
-    # Verify we're on the search results page
+    # Verify we're on the search results page and log final URL actually loaded
     try:
         WebDriverWait(driver, config.PAGE_LOAD_TIMEOUT).until(
             lambda d: "jobs" in d.current_url.lower() or "search" in d.current_url.lower()
         )
-        logger.info("✅ Search results loaded")
+        logger.info(f"✅ Search results loaded at {driver.current_url}")
     except TimeoutException:
         logger.warning("⚠️ Search results page may not have loaded properly")
 
     return True
 
 
+def _click_by_text(driver, texts):
+    """Click the first element with visible text matching any provided string."""
+    if isinstance(texts, str):
+        texts = [texts]
+    lower_targets = [t.lower() for t in texts]
+    return driver.execute_script(
+        """
+        const targets = arguments[0];
+        const els = document.querySelectorAll('label, button, div, span, a, li');
+        for (const el of els) {
+            const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
+            if (targets.includes(txt) && el.offsetHeight > 0 && el.offsetWidth > 0) {
+                el.click();
+                return txt;
+            }
+        }
+        return '';
+        """,
+        lower_targets,
+    )
+
+
 def apply_filters(driver, logger):
     """
-    Apply filters on the ZipRecruiter search results page.
-    Uses JavaScript to interact with the actual filter panel DOM:
-    - Radio buttons for employment type (Contract, Full Time, etc.)
-    - The "Apply Filters" button to submit the selection.
-    - URL parameters for quick-apply filtering.
+    Apply filters using the Filters drawer (per provided UI):
+    - Click filters icon
+    - Set Quick apply only
+    - Set Employment type -> Contract
+    - Set Date posted -> Within 1 day
+    - Click Apply Filters
     """
     logger.info("🔧 Applying filters...")
-    human_delay((2, 3))
+    human_delay((1, 2))
 
-    # ── Step 1: Open the filter panel (if it's behind a button) ──
+    # Open filters icon near search bar
     try:
-        driver.execute_script("""
-            // Look for a "Filters" or "More Filters" button to open the panel
-            let buttons = document.querySelectorAll('button, a, [role="button"]');
-            for (let btn of buttons) {
-                let text = (btn.innerText || '').toLowerCase().trim();
-                if (text === 'filters' || text === 'more filters' || text === 'all filters'
-                    || text.includes('filter')) {
-                    if (btn.offsetHeight > 0 && btn.offsetWidth > 0) {
-                        btn.click();
-                        return 'opened';
-                    }
+        opened = driver.execute_script(
+            """
+            // Prefer the header filters button (id observed: zds-header-filters-button)
+            const direct = document.querySelector('#zds-header-filters-button');
+            if (direct && direct.offsetHeight > 0) { direct.click(); return true; }
+
+            // Fallback: any button with filter in id/class/aria-label
+            const buttons = document.querySelectorAll('button, a, [role="button"]');
+            for (const btn of buttons) {
+                const txt = (btn.innerText || '').toLowerCase().trim();
+                const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+                const cls = (btn.className || '').toLowerCase();
+                const id = (btn.id || '').toLowerCase();
+                if (aria.includes('filter') || id.includes('filter') || cls.includes('filter') || txt.includes('filter')) {
+                    if (btn.offsetHeight > 0 && btn.offsetWidth > 0) { btn.click(); return true; }
                 }
             }
-            return '';
-        """)
-        human_delay((2, 3))
-    except Exception:
-        pass
+            return false;
+            """
+        )
+        logger.info(f"   Filters drawer open: {opened}")
+        human_delay((1.0, 1.5))
+    except Exception as e:
+        logger.warning(f"   ⚠️ Could not open filters drawer: {e}")
 
-    # ── Step 2: Select Employment Type (radio button) ──
+    # Apply type
+    if getattr(config, "EASY_APPLY_ONLY", False):
+        clicked = _click_by_text(driver, ["quick apply only", "quick apply"])
+        logger.info(f"   📌 Apply type -> Quick apply only ({'hit ' + clicked if clicked else 'not found'})")
+        human_delay((0.6, 1.0))
+
+    # Employment type
     job_type = JOB_TYPE_MAP.get(config.JOB_TYPE)
     if job_type:
-        type_label = job_type.replace("_", " ").title()  # "contract" -> "Contract"
-        logger.info(f"   📌 Selecting employment type: {type_label}")
-        try:
-            result = driver.execute_script("""
-                let targetText = arguments[0].toLowerCase();
-                // Strategy 1: Find radio input + label pairs
-                let labels = document.querySelectorAll('label');
-                for (let label of labels) {
-                    let text = (label.innerText || label.textContent || '').trim().toLowerCase();
-                    if (text === targetText || text.startsWith(targetText)) {
-                        label.click();
-                        return 'clicked label: ' + label.innerText.trim();
-                    }
-                }
-                // Strategy 2: Find radio inputs by value
-                let radios = document.querySelectorAll('input[type="radio"]');
-                for (let radio of radios) {
-                    let val = (radio.value || '').toLowerCase();
-                    let name = (radio.name || '').toLowerCase();
-                    if ((name.includes('employment') || name.includes('type'))
-                        && (val.includes(targetText) || val === targetText)) {
-                        radio.click();
-                        return 'clicked radio: ' + val;
-                    }
-                }
-                // Strategy 3: Find any clickable element with that text near "Employment"
-                let allEls = document.querySelectorAll('div, span, li, p');
-                for (let el of allEls) {
-                    let text = (el.innerText || '').trim().toLowerCase();
-                    if (text === targetText && el.offsetHeight > 0) {
-                        el.click();
-                        return 'clicked element: ' + text;
-                    }
-                }
-                return '';
-            """, type_label)
-            if result:
-                logger.info(f"   ✅ Employment type: {result}")
-                human_delay((1, 2))
-            else:
-                logger.info(f"   ⚠️ Could not find '{type_label}' radio button")
-        except Exception as e:
-            logger.info(f"   ℹ️ Employment type filter error: {e}")
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight * 0.6);")
+        human_delay((0.4, 0.8))
+        clicked = _click_by_text(driver, ["contract", "contractor"])
+        logger.info(f"   📌 Employment type -> Contract ({'hit ' + clicked if clicked else 'not found'})")
+        human_delay((0.6, 1.0))
 
-    # ── Step 3: Click "Apply Filters" button ──
-    try:
-        result = driver.execute_script("""
-            let buttons = document.querySelectorAll('button, input[type="submit"], a');
-            for (let btn of buttons) {
-                let text = (btn.innerText || btn.value || '').trim().toLowerCase();
-                if (text === 'apply filters' || text === 'apply filter'
-                    || text === 'show results' || text === 'update results') {
-                    if (btn.offsetHeight > 0) {
-                        btn.click();
-                        return 'clicked: ' + (btn.innerText || btn.value || '').trim();
-                    }
-                }
-            }
-            return '';
-        """)
-        if result:
-            logger.info(f"   ✅ {result}")
-            human_delay((3, 5))
-        else:
-            logger.info("   ℹ️ No 'Apply Filters' button found — filters may auto-apply")
-    except Exception as e:
-        logger.info(f"   ℹ️ Apply Filters button error: {e}")
+    # Date posted
+    if config.DATE_POSTED == "last_24_hours":
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight * 0.3);")
+        human_delay((0.4, 0.7))
+        clicked = _click_by_text(driver, ["within 1 day", "last 24 hours"])
+        logger.info(f"   📌 Date posted -> Within 1 day ({'hit ' + clicked if clicked else 'not found'})")
+        human_delay((0.6, 1.0))
 
-    # ── Step 4: Easy Apply via URL (most reliable method) ──
-    if getattr(config, 'EASY_APPLY_ONLY', False):
-        logger.info("   📌 Applying Quick Apply filter via URL...")
-        try:
-            current_url = driver.current_url
-            if "refine_by_quick_apply" not in current_url and "quick_apply" not in current_url:
-                separator = "&" if "?" in current_url else "?"
-                new_url = f"{current_url}{separator}refine_by_quick_apply=true"
-                driver.get(new_url)
-                human_delay((3, 5))
-                logger.info("   ✅ Quick Apply filter applied via URL")
-            else:
-                logger.info("   ✅ Quick Apply already in URL")
-        except Exception as e:
-            logger.info(f"   ℹ️ Quick Apply URL filter failed: {e}")
+    # Apply Filters button
+    applied = driver.execute_script(
+        """
+        const buttons = document.querySelectorAll('button, input[type="submit"]');
+        for (const btn of buttons) {
+            const txt = (btn.innerText || btn.value || '').trim().toLowerCase();
+            if (txt === 'apply filters') { btn.click(); return true; }
+        }
+        return false;
+        """
+    )
+    logger.info(f"   ✅ Apply Filters clicked: {applied}")
+    human_delay((2.0, 3.0))
 
     logger.info("✅ Filter application complete")
+
+    # Final safeguard: if essential params are missing, reload canonical URL
+    required_snippets = []
+    if getattr(config, 'EASY_APPLY_ONLY', False):
+        required_snippets.append('quick_apply=')
+    if job_type:
+        required_snippets.append('employment_type=')
+    current = driver.current_url.lower()
+    missing = [s for s in required_snippets if s not in current]
+    if missing:
+        logger.info(f"   ℹ️ URL missing {missing}; reloading canonical search URL")
+        driver.get(build_search_url())
+        human_delay((2, 3))
+
     return True
 
 

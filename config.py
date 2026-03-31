@@ -93,6 +93,9 @@ MAX_JOBS_TO_SCAN = 100
 # TIMING (seconds) — Randomized delays to mimic human behavior
 # ──────────────────────────────────────────────────────────────────────────────
 
+# Scale all delays by this factor (lower = faster). 1.0 keeps original timing.
+DELAY_FACTOR = 0.7
+
 # Delay range after each major action (min, max)
 ACTION_DELAY = (2, 5)
 

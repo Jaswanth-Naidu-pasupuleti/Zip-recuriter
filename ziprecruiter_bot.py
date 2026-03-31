@@ -252,20 +252,31 @@ def create_driver(logger):
     if driver is None:
         from selenium import webdriver
         logger.info("🌐 Using standard Selenium ChromeDriver")
-        options = Options()
-        options.add_argument("--start-maximized")
-        options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option("useAutomationExtension", False)
-        options.add_experimental_option("detach", True)
 
-        # Reuse real Chrome profile to carry cookies and reduce CAPTCHAs
-        if getattr(config, "USER_DATA_DIR", ""):
-            options.add_argument(f"--user-data-dir={config.USER_DATA_DIR}")
-        if getattr(config, "PROFILE_DIRECTORY", ""):
-            options.add_argument(f"--profile-directory={config.PROFILE_DIRECTORY}")
+        def build_options(use_profile=True):
+            opts = Options()
+            opts.add_argument("--start-maximized")
+            opts.add_argument("--disable-blink-features=AutomationControlled")
+            opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+            opts.add_experimental_option("useAutomationExtension", False)
+            opts.add_experimental_option("detach", True)
+            if use_profile and getattr(config, "USER_DATA_DIR", ""):
+                # Quote path with spaces
+                opts.add_argument(f'--user-data-dir="{config.USER_DATA_DIR}"')
+            if use_profile and getattr(config, "PROFILE_DIRECTORY", ""):
+                opts.add_argument(f'--profile-directory="{config.PROFILE_DIRECTORY}"')
+            return opts
 
-        driver = webdriver.Chrome(options=options)
+        try:
+            options = build_options(use_profile=True)
+            driver = webdriver.Chrome(options=options)
+            logger.info("✅ ChromeDriver started with user profile")
+        except Exception as e:
+            logger.warning(f"⚠️ Chrome with profile failed: {e}; retrying without profile...")
+            options = build_options(use_profile=False)
+            driver = webdriver.Chrome(options=options)
+            logger.info("✅ ChromeDriver started without user profile")
+
         # Remove webdriver flag
         driver.execute_script(
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"

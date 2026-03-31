@@ -113,8 +113,8 @@ MANUAL_LOGIN_TIMEOUT = 120
 
 # Optional: use your real Chrome profile to reuse cookies/sessions (helps avoid CAPTCHAs)
 # Example (macOS): USER_DATA_DIR = "/Users/<you>/Library/Application Support/Google/Chrome"
-USER_DATA_DIR = ""
-PROFILE_DIRECTORY = "Default"
+USER_DATA_DIR = "/Users/jaswanthnaidupasupuleti/Library/Application Support/Google/Chrome"
+PROFILE_DIRECTORY = "jaswanth"
 
 # Set to True to try undetected_chromedriver first; False to stick with standard ChromeDriver
 USE_UNDETECTED = False
